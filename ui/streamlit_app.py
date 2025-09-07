@@ -6,6 +6,17 @@ import requests
 import streamlit as st
 from PIL import Image
 
+
+# -- Kaggle creds bootstrap --
+if "KAGGLE_USERNAME" in st.secrets and "KAGGLE_KEY" in st.secrets:
+    os.environ["KAGGLE_USERNAME"] = st.secrets["KAGGLE_USERNAME"]
+    os.environ["KAGGLE_KEY"] = st.secrets["KAGGLE_KEY"]
+elif "kaggle_json" in st.secrets:
+    kaggle_dir = Path.home() / ".kaggle"
+    kaggle_dir.mkdir(parents=True, exist_ok=True)
+    (kaggle_dir / "kaggle.json").write_text(st.secrets["kaggle_json"])
+    os.chmod(kaggle_dir / "kaggle.json", 0o600)
+
 # ---------- Page setup ----------
 st.set_page_config(page_title="OncoVision: Your Histopathology Assistant", layout="wide")
 st.markdown(
@@ -82,9 +93,6 @@ with colh2:
 
 st.divider()
 
-# ======================================================================
-# 🌐 Kaggle sample gallery (LC25000) — Secrets-based auth + filtering
-# ======================================================================
 KAGGLE_DATASET = "andrewmvd/lung-and-colon-cancer-histopathological-images"
 KAGGLE_CACHE = Path("data/kaggle_lc25000")
 KAGGLE_ZIP = KAGGLE_CACHE / "lc25000.zip"
@@ -123,26 +131,24 @@ def have_kaggle_creds() -> bool:
     return candidate1.exists() or candidate2.exists()
 
 def download_kaggle_dataset():
-    import kaggle
-    # Make sure creds exist & authenticate
-    if not have_kaggle_creds():
-        raise RuntimeError("Kaggle credentials not configured.")
-    kaggle.api.authenticate()
-
     KAGGLE_CACHE.mkdir(parents=True, exist_ok=True)
-    # If already extracted images exist, skip
     if any(KAGGLE_CACHE.rglob("*.png")) or any(KAGGLE_CACHE.rglob("*.jpg")):
         return
-    # If zip not present, download via CLI
-    if not KAGGLE_ZIP.exists():
-        cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
-        subprocess.run(cmd, check=True)
-        zips = list(KAGGLE_CACHE.glob("*.zip"))
-        if zips:
-            zips[0].rename(KAGGLE_ZIP)
-    # Extract
-    with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
-        zf.extractall(KAGGLE_CACHE)
+    try:
+        if not KAGGLE_ZIP.exists():
+            cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
+            subprocess.run(cmd, check=True)
+            zips = list(KAGGLE_CACHE.glob("*.zip"))
+            if zips:
+                zips[0].rename(KAGGLE_ZIP)
+        with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
+            zf.extractall(KAGGLE_CACHE)
+    except Exception:
+        # Fallback to Python API
+        from kaggle.api.kaggle_api_extended import KaggleApi
+        api = KaggleApi()
+        api.authenticate()
+        api.dataset_download_files(KAGGLE_DATASET, path=str(KAGGLE_CACHE), unzip=True)
 
 # LC25000-aware class inference
 POS_TOKENS = {
