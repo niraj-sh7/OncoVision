@@ -1,4 +1,4 @@
-# OncoVision — Histopathology AI Assistant (Hackathon Starter)
+# OncoVision: Histopathology AI Assistant
 
 End-to-end demo that classifies **histology patches** as suspicious/benign and returns an **explainability heatmap (Grad-CAM)**.
 
