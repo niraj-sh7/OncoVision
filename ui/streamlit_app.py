@@ -7,6 +7,18 @@ import requests
 import streamlit as st
 from PIL import Image
 
+# --- Uploader key rev helpers (avoid writing to widget state directly) ---
+def _get_upload_rev() -> int:
+    if "upload_rev" not in st.session_state:
+        st.session_state["upload_rev"] = 0
+    return st.session_state["upload_rev"]
+
+def _bump_upload_rev() -> None:
+    st.session_state["upload_rev"] = _get_upload_rev() + 1
+
+def _uploader_key() -> str:
+    return f"upload_input_v2_{_get_upload_rev()}"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Safe image display across Streamlit versions (pre/post 1.32)
 # Tries use_container_width -> use_column_width -> no kw
@@ -326,21 +338,22 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                                 img.save(buf, format="PNG")
                                 st.session_state["image_bytes"] = buf.getvalue()
                                 st.session_state["from_sample"] = f"{LABEL_MAP.get(cls,cls)} • {p.name}"
-                                # Clear uploader selection so single source of truth
-                                st.session_state["upload_input_v2"] = None
+                                _bump_upload_rev()  # remount uploader so Kaggle becomes the single source
                                 st.toast(f"Loaded {p.name}", icon="✅")
+
+
                         except Exception:
                             st.write("Image unreadable")
 
 st.divider()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Upload widget (single, stable key to avoid DuplicateWidgetID)
+# Upload widget (single logical uploader; remount by changing key when needed)
 # ──────────────────────────────────────────────────────────────────────────────
 uploaded = st.file_uploader(
     "Upload image",
     type=["png", "jpg", "jpeg"],
-    key="upload_input_v2",
+    key=_uploader_key(),
 )
 
 def _set_current_image_from_upload(_uploaded):
@@ -357,7 +370,7 @@ with cc1:
     if st.button("Clear image", key="btn_clear_image"):
         st.session_state.pop("image_bytes", None)
         st.session_state.pop("from_sample", None)
-        st.session_state["upload_input_v2"] = None  # clear selection
+        _bump_upload_rev()  # remount uploader next run
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Probability semantics defaulting
