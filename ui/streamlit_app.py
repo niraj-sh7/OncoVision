@@ -15,7 +15,7 @@ IMG_KW = (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Kaggle credentials bootstrap
+# Kaggle credentials bootstrap (supports either KAGGLE_USERNAME/KEY or kaggle_json)
 # ──────────────────────────────────────────────────────────────────────────────
 if "KAGGLE_USERNAME" in st.secrets and "KAGGLE_KEY" in st.secrets:
     os.environ["KAGGLE_USERNAME"] = st.secrets["KAGGLE_USERNAME"]
@@ -27,7 +27,7 @@ elif "kaggle_json" in st.secrets:
     try:
         os.chmod(kaggle_dir / "kaggle.json", 0o600)
     except Exception:
-        pass
+        pass  # some platforms restrict chmod
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page setup & styles
@@ -40,7 +40,6 @@ st.markdown(
       .metric-box {background: #0f172a0a; border: 1px solid #e5e7eb; padding: 10px 12px; border-radius: 12px;}
       .footer-note {color:#475569;font-size:0.85rem;}
       .stButton>button {border-radius:10px;padding:0.5rem 1rem;}
-      .pill {display:inline-block; padding:2px 8px; border-radius:9999px; font-size:0.75rem; background:#0f172a14; border:1px solid #334155; margin-right:6px;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -54,7 +53,7 @@ API_URL = st.secrets.get("API_URL", API_DEFAULT)
 
 INLINE_ENGINE = False
 try:
-    from api.inference import InferenceEngine as _Engine
+    from api.inference import InferenceEngine as _Engine  # your project engine (optional)
 except Exception:
     _Engine = None
     INLINE_ENGINE = True
@@ -68,6 +67,7 @@ if FORCE_INLINE:
 # ──────────────────────────────────────────────────────────────────────────────
 st.sidebar.header("Settings")
 
+# Mode selection
 run_mode = st.sidebar.radio("Run mode", ["Remote API", "Local (in-app)"], index=1, key="run_mode_radio")
 
 API_URL = st.sidebar.text_input(
@@ -87,16 +87,16 @@ weights_path = st.sidebar.text_input(
 threshold = st.sidebar.slider("Decision threshold (Cancer)", 0.00, 1.00, 0.50, 0.01)
 st.sidebar.caption("Prediction ≥ threshold → label = Cancer (else Benign)")
 
-# Source-aware semantics (default)
+# Probability semantics override
 st.sidebar.markdown("**Model’s raw probability represents…**")
 sem_choice = st.sidebar.radio(
     "Probability semantics",
-    options=["Auto (by source)", "Cancer", "Benign"],
+    options=["Auto (by run mode)", "Cancer", "Benign"],
     index=0,
     key="prob_semantics_radio",
     help=(
-        "Auto (by source): Kaggle sample ⇒ raw=P(cancer); Uploaded image ⇒ raw=P(benign). "
-        "You can override to force an interpretation."
+        "Auto picks a sensible default per source: Kaggle sample → raw=P(cancer), "
+        "Upload → raw=P(benign). If no image yet, we fall back to the run-mode default."
     ),
 )
 st.sidebar.markdown('<span class="badge">Research demo</span>', unsafe_allow_html=True)
@@ -161,16 +161,22 @@ def have_kaggle_creds() -> bool:
 
 def download_kaggle_dataset():
     KAGGLE_CACHE.mkdir(parents=True, exist_ok=True)
+    # If already extracted with images, return early
     if any(KAGGLE_CACHE.rglob("*.png")) or any(KAGGLE_CACHE.rglob("*.jpg")):
         return
+
     if not KAGGLE_ZIP.exists():
         cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
         subprocess.run(cmd, check=True)
         zips = list(KAGGLE_CACHE.glob("*.zip"))
         if zips:
             zips[0].rename(KAGGLE_ZIP)
+
+    # Unzip main archive
     with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
         zf.extractall(KAGGLE_CACHE)
+
+    # Unzip nested zips (LC25000 has sub-archives)
     for inner_zip in KAGGLE_CACHE.rglob("*.zip"):
         try:
             with zipfile.ZipFile(inner_zip, "r") as zf:
@@ -227,11 +233,12 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                     try:
                         download_kaggle_dataset()
                         st.success("Dataset ready.")
-                        st.session_state.pop("kaggle_index", None)
+                        st.session_state.pop("kaggle_index", None)  # rebuild index
                         st.rerun()
                     except Exception as e:
                         st.error(f"Download failed: {e}")
 
+        # Build / read index
         if "kaggle_index" not in st.session_state:
             st.session_state["kaggle_index"] = build_kaggle_index()
         idx = st.session_state["kaggle_index"]
@@ -288,8 +295,9 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                                 buf = io.BytesIO(); img.save(buf, format="PNG")
                                 st.session_state["image_bytes"] = buf.getvalue()
                                 st.session_state["from_sample"] = f"{LABEL_MAP.get(cls,cls)} • {p.name}"
-                                st.session_state["source_kind"] = "kaggle"  # tag source
-                                st.session_state["_upload_rev"] = st.session_state.get("_upload_rev", 0) + 1
+                                st.session_state["source_kind"] = "kaggle"    # ← NEW: tag source
+                                _rev = st.session_state.get("_upload_rev", 0)
+                                st.session_state["_upload_rev"] = _rev + 1   # force remount uploader
                                 st.toast(f"Loaded {p.name}", icon="✅")
                                 st.rerun()
                         except Exception:
@@ -298,7 +306,7 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
 st.divider()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Upload widget (remount-safe key)
+# Upload widget (single, stable key + remount version to avoid state errors)
 # ──────────────────────────────────────────────────────────────────────────────
 def _bump_upload_rev():
     st.session_state["_upload_rev"] = st.session_state.get("_upload_rev", 0) + 1
@@ -306,56 +314,52 @@ def _bump_upload_rev():
 uploaded = st.file_uploader(
     "Upload image",
     type=["png", "jpg", "jpeg"],
-    key=f"upload_input_v2_{st.session_state.get('_upload_rev', 0)}",
+    key=f"upload_input_v2_{st.session_state.get('_upload_rev', 0)}",  # remount-safe key
 )
 
+# Keep a single source of truth for the current image
 def _set_current_image_from_upload(_uploaded):
     if _uploaded is not None:
         st.session_state["image_bytes"] = _uploaded.read()
         st.session_state["from_sample"] = "uploaded_file"
-        st.session_state["source_kind"] = "upload"
+        st.session_state["source_kind"] = "upload"  # ← NEW: tag source
 
 if uploaded is not None:
     _set_current_image_from_upload(uploaded)
 
+# Clear controls
 cc1, cc2 = st.columns([0.25, 0.75])
 with cc1:
     if st.button("Clear image", key="btn_clear_image"):
         st.session_state.pop("image_bytes", None)
         st.session_state.pop("from_sample", None)
-        st.session_state.pop("source_kind", None)
+        st.session_state.pop("source_kind", None)  # ← NEW: clear tag
         _bump_upload_rev()
         st.experimental_rerun()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Source-aware probability semantics
+# Determine probability semantics (source-aware auto, with optional override)
 # ──────────────────────────────────────────────────────────────────────────────
-def auto_semantics() -> str:
-    src = st.session_state.get("source_kind")
-    if src == "kaggle":
-        return "Cancer"   # raw = P(cancer)
-    if src == "upload":
-        return "Benign"   # raw = P(benign)
-    # If no/unknown source, fall back to a sensible mode default:
-    return "Cancer" if run_mode == "Remote API" else "Benign"
-
-PROB_SEMANTICS = sem_choice if sem_choice in ("Cancer", "Benign") else auto_semantics()
-
-# Small badge so you can verify what’s in effect
-src_label = (
-    "Kaggle sample" if st.session_state.get("source_kind") == "kaggle"
-    else ("Upload" if st.session_state.get("source_kind") == "upload" else "—")
-)
-st.markdown(
-    f'<div class="pill">Source: {src_label}</div>'
-    f'<div class="pill">Semantics: raw = P({PROB_SEMANTICS.lower()})</div>',
-    unsafe_allow_html=True,
-)
+source_kind = st.session_state.get("source_kind")  # "kaggle" | "upload" | None
+if sem_choice == "Auto (by run mode)":
+    if source_kind == "kaggle":
+        PROB_SEMANTICS = "Cancer"     # raw = P(cancer)
+    elif source_kind == "upload":
+        PROB_SEMANTICS = "Benign"     # raw = P(benign)
+    else:
+        # Fallback if no/unknown image yet: keep previous run-mode default
+        PROB_SEMANTICS = "Cancer" if run_mode == "Remote API" else "Benign"
+else:
+    PROB_SEMANTICS = sem_choice  # explicit override: "Cancer" or "Benign"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Inference engine (local fallback)
+# Inference engine (local fallback) — imports only when needed
 # ──────────────────────────────────────────────────────────────────────────────
 def get_local_engine(weights_path: str):
+    """
+    Return an InferenceEngine instance.
+    Tries api.inference.InferenceEngine if available; otherwise uses inline fallback.
+    """
     global INLINE_ENGINE
     if not INLINE_ENGINE and _Engine is not None:
         try:
@@ -377,7 +381,7 @@ def get_local_engine(weights_path: str):
         except TypeError:
             INLINE_ENGINE = True
 
-    # ---- INLINE FALLBACK ----
+    # ---- INLINE FALLBACK (imports only when needed) ----
     import io as _io, base64 as _b64
     from dataclasses import dataclass
     from typing import Optional as _Opt, List as _List
@@ -531,15 +535,15 @@ with right:
                 if run_mode == "Remote API":
                     if not api_ok(API_URL):
                         st.error("API is offline. Check your API URL in the sidebar.")
-                        st.stop()
-                    files = {"file": ("input.png", st.session_state["image_bytes"], "image/png")}
-                    r = requests.post(f"{API_URL}/predict", files=files, timeout=40)
-                    if not r.ok:
-                        st.error(f"API error: {r.status_code} — {r.text[:300]}")
-                        st.stop()
-                    data = r.json()
-                    raw_prob = float(data.get("prob", 0.0))
-                    overlay_b64 = data.get("overlay_png_b64")
+                    else:
+                        files = {"file": ("input.png", st.session_state["image_bytes"], "image/png")}
+                        r = requests.post(f"{API_URL}/predict", files=files, timeout=40)
+                        if not r.ok:
+                            st.error(f"API error: {r.status_code} — {r.text[:300]}")
+                            st.stop()
+                        data = r.json()
+                        raw_prob = float(data.get("prob", 0.0))
+                        overlay_b64 = data.get("overlay_png_b64")
                 else:
                     engine = _get_engine_cached(weights_path)
                     res = engine.predict_with_heatmap(st.session_state["image_bytes"])
@@ -547,7 +551,7 @@ with right:
                     overlay_b64 = getattr(res, "overlay_png_b64", None)
                     overlay_msg = getattr(res, "msg", None)
 
-                # --- Interpret raw prob using source-aware semantics ---
+                # --- Interpret raw prob under chosen semantics ---
                 p_cancer_if_raw_is_cancer = raw_prob
                 p_cancer_if_raw_is_benign = 1.0 - raw_prob
                 prob = (
@@ -559,7 +563,7 @@ with right:
                 mc1, mc2 = st.columns(2)
                 with mc1:
                     st.metric(
-                        "Cancer probability (source-aware)",
+                        "Cancer probability (using source-aware assumption)",
                         f"{prob:.3f}",
                         help=f"Assuming raw = P({PROB_SEMANTICS.lower()}). Decision threshold = {threshold:.2f}"
                     )
@@ -567,8 +571,8 @@ with right:
                     st.metric("Predicted label", label)
 
                 src_label = (
-                    "Kaggle sample" if st.session_state.get("source_kind") == "kaggle"
-                    else ("Upload" if st.session_state.get("source_kind") == "upload" else "Unknown")
+                    "Kaggle sample" if source_kind == "kaggle"
+                    else ("Upload" if source_kind == "upload" else "Unknown")
                 )
                 st.caption(
                     f"Raw model prob = {raw_prob:.3f} · "
