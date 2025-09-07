@@ -110,11 +110,11 @@ def api_ok(url: str) -> bool:
 with colh2:
     if run_mode == "Remote API":
         ok = api_ok(API_URL)
-        st.markdown(f"**API:** {'🟢 Live' if ok else '🔴 Offline'}")
+        st.markdown(f"**API:** {'Live' if ok else 'Offline'}")
         st.caption(API_URL)
     else:
         ok = True
-        st.markdown("**Local engine:** 🟢 Enabled")
+        st.markdown("**Local engine:** Enabled")
         st.caption(Path(weights_path).as_posix())
 
 st.divider()
@@ -285,7 +285,7 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                                 st.session_state["from_sample"] = f"{LABEL_MAP.get(cls,cls)} • {p.name}"
                                 st.session_state["source_kind"] = "kaggle" 
                                 _bump_upload_rev()  
-                                st.toast(f"Loaded {p.name}", icon="✅")
+                                st.toast(f"Loaded {p.name}")
                                 st.rerun()
                         except Exception:
                             st.write("Image unreadable")
