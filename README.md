@@ -8,7 +8,7 @@ End-to-end demo that classifies **histology patches** as suspicious/benign and r
 - **Grad-CAM**: Visual overlay to highlight regions driving the prediction.
 - **Streamlit** demo UI: drag & drop an image, see probability + heatmap instantly.
 
-> ⚠️ Scope: patch-level classification (e.g., 224×224 H&E tiles). Not a clinical tool.
+> Scope: patch-level classification (e.g., 224×224 H&E tiles). Not a clinical tool.
 
 ---
 
