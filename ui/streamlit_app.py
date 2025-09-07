@@ -217,10 +217,6 @@ def build_kaggle_index():
 # Kaggle expander
 # =========================================
 with st.expander("Try sample images from Kaggle (LC25000)", expanded=False):
-    with st.popover("Debug: show available secret keys"):
-        st.caption("Names only (not values):")
-        st.code("\n".join(sorted(_list_secret_keys())) or "(no secrets found)")
-
     if not have_kaggle_creds():
         st.warning(
             "Kaggle credentials not found. Add them as either:\n\n"
@@ -465,8 +461,39 @@ def _get_engine_cached(path: str):
 left, right = st.columns([0.55, 0.45])
 
 # Input preview
+# =========================================
+# Upload + Input preview  (REPLACE THIS WHOLE BLOCK)
+# =========================================
+left, right = st.columns([0.55, 0.45])
+
 with left:
     st.subheader("Input")
+
+    # File uploader — always overwrite session image when user picks a new file
+    uploaded = st.file_uploader(
+        "Upload image",
+        type=["png", "jpg", "jpeg"],
+        key="uploader_unique",
+        help="Choose a PNG/JPG patch to analyze",
+    )
+
+    if uploaded is not None:
+        # getvalue() doesn’t consume the stream; safe to call repeatedly
+        new_bytes = uploaded.getvalue()
+        if new_bytes:
+            st.session_state["image_bytes"] = new_bytes
+            st.session_state["from_sample"] = f"uploaded_file • {uploaded.name}"
+
+    # Small utility to clear the currently loaded image
+    if st.button("Clear image", key="btn_clear_image"):
+        st.session_state.pop("image_bytes", None)
+        st.session_state.pop("from_sample", None)
+        st.rerun()
+
+    # Source of truth for downstream steps
+    image_bytes: Optional[bytes] = st.session_state.get("image_bytes")
+
+    # Show preview
     if image_bytes:
         try:
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -478,6 +505,56 @@ with left:
             st.error(f"Could not read image: {e}")
     else:
         st.info("Upload an image or choose a Kaggle sample above to begin.")
+
+with right:
+    st.subheader("Prediction")
+    analyze_disabled = (not st.session_state.get("image_bytes")) or (not ok)
+    if st.button("Analyze", type="primary", disabled=analyze_disabled, use_container_width=True, key="analyze_btn"):
+        image_bytes = st.session_state.get("image_bytes")
+        if not image_bytes:
+            st.error("Please select or upload an image first.")
+        else:
+            try:
+                if run_mode == "Remote API":
+                    if not api_ok(API_URL):
+                        st.error("API is offline. Check your API URL in the sidebar.")
+                    else:
+                        files = {"file": ("input.png", image_bytes, "image/png")}
+                        r = requests.post(f"{API_URL}/predict", files=files, timeout=40)
+                        if not r.ok:
+                            st.error(f"API error: {r.status_code} — {r.text[:300]}")
+                        else:
+                            data = r.json()
+                            prob = float(data.get("prob", 0.0))
+                            label = "Cancer" if prob >= threshold else "Benign"
+                            m1, m2 = st.columns(2)
+                            with m1:
+                                st.metric("Cancer probability", f"{prob:.3f}", help=f"Decision threshold = {threshold:.2f}")
+                            with m2:
+                                st.metric("Predicted label", label)
+                            b64 = data.get("overlay_png_b64")
+                            if b64:
+                                st.image(Image.open(io.BytesIO(base64.b64decode(b64))), caption="Heatmap Overlay", use_column_width=True)
+                            else:
+                                st.info("Heatmap unavailable for this image.")
+                else:
+                    engine = _get_engine_cached(weights_path)
+                    res = engine.predict_with_heatmap(image_bytes)
+                    prob = float(res.prob)
+                    label = "Cancer" if prob >= threshold else "Benign"
+                    m1, m2 = st.columns(2)
+                    with m1:
+                        st.metric("Cancer probability", f"{prob:.3f}", help=f"Decision threshold = {threshold:.2f}")
+                    with m2:
+                        st.metric("Predicted label", label)
+                    if getattr(res, "overlay_png_b64", None):
+                        st.image(Image.open(io.BytesIO(base64.b64decode(res.overlay_png_b64))), caption="Heatmap Overlay", use_column_width=True)
+                    elif getattr(res, "msg", None):
+                        st.info(res.msg)
+                    else:
+                        st.info("Heatmap unavailable for this image.")
+            except Exception as e:
+                st.toast(f"Request failed: {e}", icon="⚠️")
 
 # Prediction
 with right:
