@@ -341,18 +341,11 @@ with cc1:
 # Determine probability semantics (source-aware auto, with optional override)
 # ──────────────────────────────────────────────────────────────────────────────
 source_kind = st.session_state.get("source_kind")  # "kaggle" | "upload" | None
-if not source_kind:
-    src = st.session_state.get("from_sample")
-    if src == "uploaded_file":
-        source_kind = "upload"
-    elif isinstance(src, str) and src:  # any non-empty label coming from Kaggle picker
-        source_kind = "kaggle"
-
 if sem_choice == "Auto (by run mode)":
     if source_kind == "kaggle":
-        PROB_SEMANTICS = "Cancer"   # raw = P(cancer) for Kaggle samples
+        PROB_SEMANTICS = "Cancer"     # raw = P(cancer)
     elif source_kind == "upload":
-        PROB_SEMANTICS = "Benign"   # raw = P(benign) for uploads
+        PROB_SEMANTICS = "Benign"     # raw = P(benign)
     else:
         # Fallback if no/unknown image yet: keep previous run-mode default
         PROB_SEMANTICS = "Cancer" if run_mode == "Remote API" else "Benign"
