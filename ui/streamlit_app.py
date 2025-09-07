@@ -1,7 +1,7 @@
 # ui/streamlit_app.py
 import os, io, json, base64, math, zipfile, subprocess, re
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Dict, List
 
 import requests
 import streamlit as st
@@ -29,7 +29,6 @@ st.markdown(
 API_DEFAULT = os.getenv("API_URL", "http://localhost:8000")
 API_URL = st.secrets.get("API_URL", API_DEFAULT)
 
-# Try to import project engine; fallback to inline later.
 INLINE_ENGINE = False
 try:
     from api.inference import InferenceEngine as _Engine
@@ -37,8 +36,7 @@ except Exception:
     _Engine = None
     INLINE_ENGINE = True
 
-FORCE_INLINE = os.getenv("ONCOVISION_FORCE_INLINE") == "1"
-if FORCE_INLINE:
+if os.getenv("ONCOVISION_FORCE_INLINE") == "1":
     INLINE_ENGINE = True
 
 # =========================================
@@ -104,14 +102,7 @@ def _list_secret_keys() -> List[str]:
         return []
 
 def _read_kaggle_creds_from_secrets() -> Optional[Dict[str, str]]:
-    """
-    Try multiple shapes:
-      1) [KAGGLE] / [kaggle] with username/key
-      2) KAGGLE_USERNAME / KAGGLE_KEY (flat)
-      3) kaggle_json (full file content)
-    Returns dict {"username": "...", "key": "..."} or None.
-    """
-    # 1) Section styles
+    # 1) [KAGGLE]/[kaggle]/[Kaggle] section
     for sect in ("KAGGLE", "kaggle", "Kaggle"):
         try:
             block = st.secrets.get(sect)
@@ -122,19 +113,15 @@ def _read_kaggle_creds_from_secrets() -> Optional[Dict[str, str]]:
                     return {"username": str(u), "key": str(k)}
         except Exception:
             pass
-
     # 2) Flat env-like keys
     u = st.secrets.get("KAGGLE_USERNAME") or st.secrets.get("kaggle_username")
     k = st.secrets.get("KAGGLE_KEY") or st.secrets.get("kaggle_key")
     if u and k:
         return {"username": str(u), "key": str(k)}
-
-    # 3) Full kaggle_json provided
+    # 3) Full kaggle_json
     kj = st.secrets.get("kaggle_json") or st.secrets.get("KAGGLE_JSON")
     if kj:
-        # Write exactly as-is; caller will set perms.
-        home = Path.home()
-        kd = home / ".kaggle"
+        kd = Path.home() / ".kaggle"
         kd.mkdir(parents=True, exist_ok=True)
         f = kd / "kaggle.json"
         f.write_text(str(kj))
@@ -142,29 +129,19 @@ def _read_kaggle_creds_from_secrets() -> Optional[Dict[str, str]]:
             os.chmod(f, 0o600)
         except Exception:
             pass
-        # Try to parse just to confirm it looks right
         try:
             data = json.loads(kj)
             if "username" in data and "key" in data:
                 return {"username": data["username"], "key": data["key"]}
         except Exception:
-            # It's fine if we can't parse; kaggle CLI will read the file anyway
             return {"username": "unknown", "key": "set_via_file"}
     return None
 
 def ensure_kaggle_credentials() -> bool:
-    """
-    Ensure we end with ~/.kaggle/kaggle.json present.
-    Returns True if the file exists (written or already present).
-    """
-    home = Path.home()
-    kd = home / ".kaggle"
+    kd = Path.home() / ".kaggle"
     f = kd / "kaggle.json"
-
-    # If file already exists, we're good.
     if f.exists():
         return True
-
     creds = _read_kaggle_creds_from_secrets()
     if creds:
         kd.mkdir(parents=True, exist_ok=True)
@@ -175,25 +152,19 @@ def ensure_kaggle_credentials() -> bool:
         except Exception:
             pass
         return True
-
     return False
 
 def have_kaggle_creds() -> bool:
     if ensure_kaggle_credentials():
         return True
-    # Fallback additional locations
     home = Path.home()
-    candidate1 = home / ".kaggle" / "kaggle.json"
-    candidate2 = Path(os.environ.get("USERPROFILE", "")) / ".kaggle" / "kaggle.json"
-    return candidate1.exists() or candidate2.exists()
+    return (home/".kaggle"/"kaggle.json").exists()
 
 # ---------- Download + unzip helpers ----------
 def _unzip_all_recursively(where: Path) -> None:
-    # Unzip root ZIP (already ensured) + any nested ZIPs (LC25000 contains colon/lung zips)
-    did_something = True
-    # Repeat until there are no more zips left (handles deeper nesting safely)
-    while did_something:
-        did_something = False
+    did = True
+    while did:
+        did = False
         for z in sorted(where.rglob("*.zip")):
             try:
                 tgt = z.parent / z.stem
@@ -201,79 +172,60 @@ def _unzip_all_recursively(where: Path) -> None:
                 with zipfile.ZipFile(z, "r") as zf:
                     zf.extractall(tgt)
                 z.unlink(missing_ok=True)
-                did_something = True
+                did = True
             except Exception as e:
                 print(f"Skipping nested zip {z}: {e}")
 
 def download_kaggle_dataset():
     KAGGLE_CACHE.mkdir(parents=True, exist_ok=True)
-
-    # If images already present, skip
     if any(KAGGLE_CACHE.rglob("*.png")) or any(KAGGLE_CACHE.rglob("*.jpg")) or any(KAGGLE_CACHE.rglob("*.jpeg")):
         return
-
-    # Download with kaggle CLI (preferred for large files)
     if not KAGGLE_ZIP.exists():
         cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
         subprocess.run(cmd, check=True)
-        # The CLI might choose its own ZIP name; pick the newest one if present
         zips = sorted(KAGGLE_CACHE.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
         if zips:
             zips[0].rename(KAGGLE_ZIP)
-
-    # Unzip everything (root + nested)
     with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
         zf.extractall(KAGGLE_CACHE)
     _unzip_all_recursively(KAGGLE_CACHE)
 
 # ---------- Class inference heuristics ----------
-POS_TOKENS = {
-    "adenocarcinoma", "carcinoma", "malignant", "cancer",
-    "aca", "lung_aca", "colon_aca", "scc", "lung_scc", "squamous"
-}
-NEG_TOKENS = {"benign", "normal", "lung_n", "colon_n", "_n"}
+POS_TOKENS = {"adenocarcinoma","carcinoma","malignant","cancer","aca","lung_aca","colon_aca","scc","lung_scc","squamous"}
+NEG_TOKENS = {"benign","normal","lung_n","colon_n","_n"}
 
 def infer_class_from_path(p: Path) -> str:
     text = str(p).lower().replace("\\", "/")
     for tok in POS_TOKENS:
-        if tok in text:
-            return "1_cancer"
+        if tok in text: return "1_cancer"
     for tok in NEG_TOKENS:
-        if tok in text:
-            return "0_normal"
-    if re.search(r"/(lung|colon)_(aca|scc)/", text):
-        return "1_cancer"
-    if re.search(r"/(lung|colon)_n/", text):
-        return "0_normal"
+        if tok in text: return "0_normal"
+    if re.search(r"/(lung|colon)_(aca|scc)/", text): return "1_cancer"
+    if re.search(r"/(lung|colon)_n/", text): return "0_normal"
     return "unknown"
 
 def build_kaggle_index():
-    exts = {".png", ".jpg", ".jpeg"}
+    exts = {".png",".jpg",".jpeg"}
     items = []
-    if not KAGGLE_CACHE.exists():
-        return items
+    if not KAGGLE_CACHE.exists(): return items
     for p in KAGGLE_CACHE.rglob("*"):
         if p.suffix.lower() in exts:
-            cls = infer_class_from_path(p)
-            items.append((cls, p))
+            items.append((infer_class_from_path(p), p))
     return items
 
 # =========================================
 # Kaggle expander
 # =========================================
 with st.expander("Try sample images from Kaggle (LC25000)", expanded=False):
-    # Small debug to help verify secrets are visible (names only)
     with st.popover("Debug: show available secret keys"):
-        st.caption("These are only the *names* of secrets, not the values.")
+        st.caption("Names only (not values):")
         st.code("\n".join(sorted(_list_secret_keys())) or "(no secrets found)")
 
     if not have_kaggle_creds():
         st.warning(
-            "Kaggle credentials not found. Add them in Streamlit Secrets as either:\n\n"
-            "1) A section:\n"
-            "[KAGGLE]\nusername=\"...\"\nkey=\"...\"\n\n"
-            "2) Flat keys:\nKAGGLE_USERNAME=\"...\"\nKAGGLE_KEY=\"...\"\n\n"
-            "3) Or a full file:\nkaggle_json=\"{ \\\"username\\\": \\\"...\\\", \\\"key\\\": \\\"...\\\" }\"\n\n"
+            "Kaggle credentials not found. Add them as either:\n\n"
+            "[KAGGLE]\\nusername=\"...\"\\nkey=\"...\"\n\n"
+            "or KAGGLE_USERNAME / KAGGLE_KEY, or kaggle_json with the full JSON.\n"
             "Then restart the app."
         )
     else:
@@ -284,7 +236,7 @@ with st.expander("Try sample images from Kaggle (LC25000)", expanded=False):
                     try:
                         download_kaggle_dataset()
                         st.success("Dataset ready.")
-                        st.session_state.pop("kaggle_index", None)  # rebuild index
+                        st.session_state.pop("kaggle_index", None)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Download failed: {e}")
@@ -340,7 +292,7 @@ with st.expander("Try sample images from Kaggle (LC25000)", expanded=False):
                                 </div>
                             """
                             st.markdown(badge, unsafe_allow_html=True)
-                            st.image(img, caption=p.name, use_container_width=True)
+                            st.image(img, caption=p.name, use_column_width=True)
                             if st.button(f"Use {p.name}", key=f"use_{p.stat().st_ino}_{i}"):
                                 buf = io.BytesIO()
                                 img.save(buf, format="PNG")
@@ -369,31 +321,17 @@ if image_bytes is None and uploaded is not None:
 # Local engine loader (robust)
 # =========================================
 def get_local_engine(weights_path: str):
-    """
-    Return an InferenceEngine instance.
-    - If api.inference is available, try several constructor signatures:
-        InferenceEngine(weights_path=...), InferenceEngine(weights_path), InferenceEngine()
-      and call .load_weights(path) if that method exists.
-    - Otherwise use the inline fallback that loads 'weights_path' directly.
-    """
     global INLINE_ENGINE
 
     if not INLINE_ENGINE and _Engine is not None:
-        # Try keyword argument
         try:
-            eng = _Engine(weights_path=weights_path)
-            return eng
+            return _Engine(weights_path=weights_path)
         except TypeError:
             pass
-
-        # Try positional path
         try:
-            eng = _Engine(weights_path)  # type: ignore
-            return eng
+            return _Engine(weights_path)  # type: ignore
         except TypeError:
             pass
-
-        # Try no-arg + optional load_weights
         try:
             eng = _Engine()
             if hasattr(eng, "load_weights"):
@@ -532,7 +470,7 @@ with left:
     if image_bytes:
         try:
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            st.image(img, use_container_width=True)
+            st.image(img, use_column_width=True)
             src = st.session_state.get("from_sample")
             if src:
                 st.caption(f"Source: {src}")
@@ -571,7 +509,7 @@ with right:
 
                             b64 = data.get("overlay_png_b64")
                             if b64:
-                                st.image(Image.open(io.BytesIO(base64.b64decode(b64))), caption="Heatmap Overlay", use_container_width=True)
+                                st.image(Image.open(io.BytesIO(base64.b64decode(b64))), caption="Heatmap Overlay", use_column_width=True)
                             else:
                                 st.info("Heatmap unavailable for this image.")
                 else:
@@ -587,7 +525,7 @@ with right:
                         st.metric("Predicted label", label)
 
                     if getattr(res, "overlay_png_b64", None):
-                        st.image(Image.open(io.BytesIO(base64.b64decode(res.overlay_png_b64))), caption="Heatmap Overlay", use_container_width=True)
+                        st.image(Image.open(io.BytesIO(base64.b64decode(res.overlay_png_b64))), caption="Heatmap Overlay", use_column_width=True)
                     elif getattr(res, "msg", None):
                         st.info(res.msg)
                     else:
@@ -625,10 +563,10 @@ else:
 
 pcols = st.columns(3)
 if cm_path.exists():
-    pcols[0].image(str(cm_path), caption="Confusion Matrix", use_container_width=True)
+    pcols[0].image(str(cm_path), caption="Confusion Matrix", use_column_width=True)
 if roc_path.exists():
-    pcols[1].image(str(roc_path), caption="ROC Curve", use_container_width=True)
+    pcols[1].image(str(roc_path), caption="ROC Curve", use_column_width=True)
 if pr_path.exists():
-    pcols[2].image(str(pr_path), caption="Precision–Recall Curve", use_container_width=True)
+    pcols[2].image(str(pr_path), caption="Precision–Recall Curve", use_column_width=True)
 
 st.markdown('<div class="footer-note">Note: Trained on LC25000 (lung & colon histopathology). Dataset is relatively clean; real-world performance may vary.</div>', unsafe_allow_html=True)
