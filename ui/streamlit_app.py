@@ -6,7 +6,9 @@ import requests
 import streamlit as st
 from PIL import Image
 
-# -- Kaggle creds bootstrap --
+# ======================================================================================
+# Kaggle credentials bootstrap (supports either KAGGLE_USERNAME/KEY or kaggle_json)
+# ======================================================================================
 if "KAGGLE_USERNAME" in st.secrets and "KAGGLE_KEY" in st.secrets:
     os.environ["KAGGLE_USERNAME"] = st.secrets["KAGGLE_USERNAME"]
     os.environ["KAGGLE_KEY"] = st.secrets["KAGGLE_KEY"]
@@ -14,9 +16,14 @@ elif "kaggle_json" in st.secrets:
     kaggle_dir = Path.home() / ".kaggle"
     kaggle_dir.mkdir(parents=True, exist_ok=True)
     (kaggle_dir / "kaggle.json").write_text(st.secrets["kaggle_json"])
-    os.chmod(kaggle_dir / "kaggle.json", 0o600)
+    try:
+        os.chmod(kaggle_dir / "kaggle.json", 0o600)
+    except Exception:
+        pass  # some platforms restrict chmod
 
-# ---------- Page setup ----------
+# ======================================================================================
+# Page setup & styles
+# ======================================================================================
 st.set_page_config(page_title="OncoVision: Your Histopathology Assistant", layout="wide")
 st.markdown(
     """
@@ -30,53 +37,65 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------- Config / Secrets ----------
+# ======================================================================================
+# Config / Secrets
+# ======================================================================================
 API_DEFAULT = os.getenv("API_URL", "http://localhost:8000")
 API_URL = st.secrets.get("API_URL", API_DEFAULT)
 
-# Try to import your project engine; we might still force-inline later.
 INLINE_ENGINE = False
 try:
-    from api.inference import InferenceEngine as _Engine  # your package's engine
+    from api.inference import InferenceEngine as _Engine  # your project engine (optional)
 except Exception:
     _Engine = None
     INLINE_ENGINE = True
 
-# Allow overriding via env: ONCOVISION_FORCE_INLINE=1
 FORCE_INLINE = os.getenv("ONCOVISION_FORCE_INLINE") == "1"
 if FORCE_INLINE:
     INLINE_ENGINE = True
 
-# ---------- Sidebar ----------
+# ======================================================================================
+# Sidebar
+# ======================================================================================
 st.sidebar.header("Settings")
-# Default to Local (in-app) so it works out of the box
-run_mode = st.sidebar.radio("Run mode", ["Remote API", "Local (in-app)"], index=1)
+
+# Mode selection
+run_mode = st.sidebar.radio("Run mode", ["Remote API", "Local (in-app)"], index=1, key="run_mode_radio")
+
 API_URL = st.sidebar.text_input(
     "API URL",
     value=API_URL,
     help="Your FastAPI base URL (e.g., https://oncovision-api.onrender.com)",
     disabled=(run_mode == "Local (in-app)")
 )
+
 weights_path = st.sidebar.text_input(
     "Local weights path",
     value="artifacts/resnet18_histopath.pt",
     help="Only used in Local mode",
     disabled=(run_mode == "Remote API")
 )
+
 threshold = st.sidebar.slider("Decision threshold (Cancer)", 0.00, 1.00, 0.50, 0.01)
 st.sidebar.caption("Prediction ≥ threshold → label = Cancer (else Benign)")
+
+# Probability semantics override
+st.sidebar.markdown("**Model’s raw probability represents…**")
+sem_choice = st.sidebar.radio(
+    "Probability semantics",
+    options=["Auto (by run mode)", "Cancer", "Benign"],
+    index=0,
+    key="prob_semantics_radio",
+    help=(
+        "Auto picks a sensible default per mode: Remote API → raw=P(cancer), "
+        "Local (in-app) → raw=P(benign). You can override here."
+    ),
+)
 st.sidebar.markdown('<span class="badge">Research demo</span>', unsafe_allow_html=True)
 
-# --- Probability semantics control ---
-prob_semantics = st.sidebar.radio(
-    "Model's raw probability represents",
-    ("Cancer", "Benign"),
-    index=1,  # your checkpoint behaved like P(benign)
-    key="prob_semantics_radio",
-    help="If your checkpoint outputs P(benign), choose 'Benign' so the app inverts it to P(cancer)."
-)
-
-# ---------- Header ----------
+# ======================================================================================
+# Header & API/Engine status
+# ======================================================================================
 colh1, colh2 = st.columns([0.75, 0.25])
 with colh1:
     st.title("OncoVision — Histopathology AI Assistant")
@@ -89,10 +108,6 @@ def api_ok(url: str) -> bool:
     except Exception:
         return False
 
-def to_cancer_prob(raw_prob: float, semantics: str) -> float:
-    """Return P(cancer) regardless of how the checkpoint defines its output."""
-    return raw_prob if semantics == "Cancer" else (1.0 - raw_prob)
-
 with colh2:
     if run_mode == "Remote API":
         ok = api_ok(API_URL)
@@ -102,27 +117,23 @@ with colh2:
         ok = True
         st.markdown("**Local engine:** 🟢 Enabled")
         st.caption(Path(weights_path).as_posix())
-    st.caption(f"Raw prob semantics: **P({prob_semantics.lower()})**")
 
 st.divider()
 
+# ======================================================================================
+# Kaggle dataset support
+# ======================================================================================
 KAGGLE_DATASET = "andrewmvd/lung-and-colon-cancer-histopathological-images"
 KAGGLE_CACHE = Path("data/kaggle_lc25000")
 KAGGLE_ZIP = KAGGLE_CACHE / "lc25000.zip"
 
-# --- Kaggle secrets bootstrap ---
 def ensure_kaggle_credentials_from_secrets() -> bool:
-    """
-    If Streamlit secrets has KAGGLE creds, write ~/.kaggle/kaggle.json
-    with 0600 perms and return True. Otherwise False.
-    """
     if "KAGGLE" not in st.secrets:
         return False
     creds = st.secrets["KAGGLE"]
     if not creds or "username" not in creds or "key" not in creds:
         return False
-    home = Path.home()
-    kaggle_dir = home / ".kaggle"
+    kaggle_dir = Path.home() / ".kaggle"
     kaggle_dir.mkdir(parents=True, exist_ok=True)
     f = kaggle_dir / "kaggle.json"
     f.write_text(json.dumps({"username": creds["username"], "key": creds["key"]}))
@@ -142,16 +153,22 @@ def have_kaggle_creds() -> bool:
 
 def download_kaggle_dataset():
     KAGGLE_CACHE.mkdir(parents=True, exist_ok=True)
+    # If already extracted with images, return early
     if any(KAGGLE_CACHE.rglob("*.png")) or any(KAGGLE_CACHE.rglob("*.jpg")):
         return
+
     if not KAGGLE_ZIP.exists():
         cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
         subprocess.run(cmd, check=True)
         zips = list(KAGGLE_CACHE.glob("*.zip"))
         if zips:
             zips[0].rename(KAGGLE_ZIP)
+
+    # Unzip main archive
     with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
         zf.extractall(KAGGLE_CACHE)
+
+    # Unzip nested zips (LC25000 has sub-archives)
     for inner_zip in KAGGLE_CACHE.rglob("*.zip"):
         try:
             with zipfile.ZipFile(inner_zip, "r") as zf:
@@ -160,9 +177,8 @@ def download_kaggle_dataset():
                 zf.extractall(target_dir)
             inner_zip.unlink()
         except Exception as e:
-            print(f"Skipping {inner_zip}: {e}")
+            print(f"Skipping nested zip {inner_zip}: {e}")
 
-# LC25000-aware class inference
 POS_TOKENS = {
     "adenocarcinoma", "carcinoma", "malignant", "cancer",
     "aca", "lung_aca", "colon_aca",
@@ -204,16 +220,17 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
     else:
         co_dl, co_stats = st.columns([1,1])
         with co_dl:
-            if st.button("Download / Refresh LC25000"):
+            if st.button("Download / Refresh LC25000", key="btn_kaggle_dl"):
                 with st.spinner("Downloading from Kaggle… first time may take a few minutes"):
                     try:
                         download_kaggle_dataset()
                         st.success("Dataset ready.")
-                        st.session_state.pop("kaggle_index", None)
+                        st.session_state.pop("kaggle_index", None)  # rebuild index
                         st.rerun()
                     except Exception as e:
                         st.error(f"Download failed: {e}")
 
+        # Build / read index
         if "kaggle_index" not in st.session_state:
             st.session_state["kaggle_index"] = build_kaggle_index()
         idx = st.session_state["kaggle_index"]
@@ -239,8 +256,8 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                 st.write(", ".join([f"{LABEL_MAP.get(c,c)}: {counts[c]}" for c in classes]))
 
             filter_options = ["All"] + [LABEL_MAP.get(c, c) for c in classes]
-            sel = st.selectbox("Class filter", filter_options, index=0)
-            sel_code = None if sel == "All" else next((k for k,v in LABEL_MAP.items() if v == sel), sel)
+            sel = st.selectbox("Class filter", filter_options, index=0, key="kaggle_class_filter")
+            sel_code = None if sel == "All" else next((k for k, v in LABEL_MAP.items() if v == sel), sel)
 
             items = idx if sel_code is None else [it for it in idx if it[0] == sel_code]
             if not items:
@@ -249,7 +266,7 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                 items = sorted(items, key=lambda t: t[1].name.lower())
                 page_size = 12
                 pages = max(1, math.ceil(len(items)/page_size))
-                page = st.number_input("Page", min_value=1, max_value=pages, value=1, step=1)
+                page = st.number_input("Page", min_value=1, max_value=pages, value=1, step=1, key="kaggle_page_num")
                 page_items = items[(page-1)*page_size : page*page_size]
 
                 grid = st.columns(4)
@@ -265,52 +282,87 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                                 </div>
                             """
                             st.markdown(badge, unsafe_allow_html=True)
-                            st.image(img, caption=p.name)
-                            if st.button(f"Use {p.name}", key=f"kgl_use::{str(p)}::{i}"):
+                            st.image(img, caption=p.name, use_container_width=True)
+                            if st.button(f"Use {p.name}", key=f"btn_use_kaggle_{p.name}_{i}"):
                                 buf = io.BytesIO(); img.save(buf, format="PNG")
                                 st.session_state["image_bytes"] = buf.getvalue()
                                 st.session_state["from_sample"] = f"{LABEL_MAP.get(cls,cls)} • {p.name}"
+                                # Clear uploader state so there's a single source of truth
+                                st.session_state.pop("upload_input_v2", None)
+                                st.toast(f"Loaded {p.name}", icon="✅")
                                 st.rerun()
                         except Exception:
                             st.write("Image unreadable")
 
 st.divider()
 
-# ---------- Upload ----------
+# ======================================================================================
+# Upload widget (single, stable key to avoid DuplicateWidgetID)
+# ======================================================================================
 uploaded = st.file_uploader(
     "Upload image",
     type=["png", "jpg", "jpeg"],
-    key="upload_input_v2",  # fixed unique key prevents DuplicateWidgetID
+    key="upload_input_v2"  # stable unique key
 )
 
-# Replace working image when a new file arrives
+# Keep a single source of truth for the current image
+def _set_current_image_from_upload(_uploaded):
+    if _uploaded is not None:
+        st.session_state["image_bytes"] = _uploaded.read()
+        st.session_state["from_sample"] = "uploaded_file"
+
 if uploaded is not None:
-    new_bytes = uploaded.read()
-    if new_bytes:
-        st.session_state["image_bytes"] = new_bytes
-        st.session_state["from_sample"] = f"uploaded_file • {uploaded.name}"
+    _set_current_image_from_upload(uploaded)
 
-# Unify source of truth for the image
-image_bytes: Optional[bytes] = st.session_state.get("image_bytes")
+# Clarify / Reset controls
+cc1, cc2 = st.columns([0.25, 0.75])
+with cc1:
+    if st.button("Clear image", key="btn_clear_image"):
+        st.session_state.pop("image_bytes", None)
+        st.session_state.pop("from_sample", None)
+        st.session_state["upload_input_v2"] = None  # clear uploader selection
+        st.experimental_rerun()
 
-# ---------- Local engine loader (robust) ----------
+# ======================================================================================
+# Mode-aware default for probability semantics
+# ======================================================================================
+DEFAULT_SEMANTICS = {
+    "Remote API": "Cancer",      # many APIs return P(cancer)
+    "Local (in-app)": "Benign",  # your checkpoint appears to return P(benign)
+}
+
+# Initialize / update effective semantics
+if "prob_semantics_effective" not in st.session_state:
+    st.session_state["prob_semantics_effective"] = DEFAULT_SEMANTICS[run_mode]
+if st.session_state.get("last_run_mode") != run_mode:
+    # When mode changes, reset to that mode's default unless user forced override
+    st.session_state["prob_semantics_effective"] = DEFAULT_SEMANTICS[run_mode]
+st.session_state["last_run_mode"] = run_mode
+
+# Apply override from sidebar radio
+if sem_choice == "Auto (by run mode)":
+    semantics_from_radio = None
+else:
+    semantics_from_radio = sem_choice  # "Cancer" or "Benign"
+
+PROB_SEMANTICS = semantics_from_radio or st.session_state["prob_semantics_effective"]
+
+# ======================================================================================
+# Inference engine (local fallback) — only load torch/etc. when needed
+# ======================================================================================
 def get_local_engine(weights_path: str):
     """
     Return an InferenceEngine instance.
-    Tries several constructor signatures for api.inference.InferenceEngine.
-    Otherwise falls back to inline engine loading the given weights.
+    Tries api.inference.InferenceEngine if available; otherwise uses inline fallback.
     """
     global INLINE_ENGINE
-
     if not INLINE_ENGINE and _Engine is not None:
         try:
-            eng = _Engine(weights_path=weights_path)
-            return eng
+            return _Engine(weights_path=weights_path)
         except TypeError:
             pass
         try:
-            eng = _Engine(weights_path)  # type: ignore
-            return eng
+            return _Engine(weights_path)  # type: ignore
         except TypeError:
             pass
         try:
@@ -324,7 +376,7 @@ def get_local_engine(weights_path: str):
         except TypeError:
             INLINE_ENGINE = True
 
-    # ---- INLINE FALLBACK ----
+    # ---- INLINE FALLBACK (imports only when needed) ----
     import io as _io, base64 as _b64
     from dataclasses import dataclass
     from typing import Optional as _Opt, List as _List
@@ -390,8 +442,8 @@ def get_local_engine(weights_path: str):
     class _InlineEngine:
         def __init__(self, weights_path: str = "artifacts/resnet18_histopath.pt"):
             self.weights_path = weights_path
-            self.device = _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
             self.model = None
+            self.device = _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
             self.preprocess = _T.Compose([
                 _T.Resize((224, 224)),
                 _T.ToTensor(),
@@ -415,7 +467,7 @@ def get_local_engine(weights_path: str):
             image = Image.open(_io.BytesIO(image_bytes)).convert("RGB")
 
             x0 = self.preprocess(image).unsqueeze(0).to(self.device)
-            prob = self._prob_only(x0)
+            prob = self._prob_only(x0)  # NOTE: This is the raw model prob
 
             overlay_b64, msg = None, None
             try:
@@ -436,21 +488,23 @@ def get_local_engine(weights_path: str):
 
     return _InlineEngine(weights_path=weights_path)
 
-# Cache a single local engine per weights path
 @st.cache_resource(show_spinner=False)
 def _get_engine_cached(path: str):
     return get_local_engine(path)
 
-# ---------- Main area ----------
+# ======================================================================================
+# Main layout
+# ======================================================================================
 left, right = st.columns([0.55, 0.45])
 
 # Input preview
 with left:
     st.subheader("Input")
+    image_bytes: Optional[bytes] = st.session_state.get("image_bytes")
     if image_bytes:
         try:
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            st.image(img)
+            st.image(img, use_container_width=True)
             src = st.session_state.get("from_sample")
             if src:
                 st.caption(f"Source: {src}")
@@ -459,83 +513,79 @@ with left:
     else:
         st.info("Upload an image or choose a Kaggle sample above to begin.")
 
-# Prediction
+# Prediction pane
 with right:
     st.subheader("Prediction")
-
-    c1, c2 = st.columns([0.7, 0.3])
-    with c2:
-        if st.button("Clear image", key="clear_image_btn"):
-            for k in ("image_bytes", "from_sample"):
-                st.session_state.pop(k, None)
-            st.rerun()
-
-    analyze_disabled = (not image_bytes) or (not ok)
-    if st.button("Analyze", type="primary", disabled=analyze_disabled, key="analyze_btn"):
-        if not image_bytes:
+    analyze_disabled = (st.session_state.get("image_bytes") is None) or (not ok)
+    if st.button("Analyze", type="primary", disabled=analyze_disabled, use_container_width=True, key="btn_analyze"):
+        if st.session_state.get("image_bytes") is None:
             st.error("Please select or upload an image first.")
         else:
             try:
+                # --- Compute raw prob ---
+                raw_prob: float
+                overlay_b64: Optional[str] = None
+                overlay_msg: Optional[str] = None
+
                 if run_mode == "Remote API":
                     if not api_ok(API_URL):
                         st.error("API is offline. Check your API URL in the sidebar.")
                     else:
-                        files = {"file": ("input.png", image_bytes, "image/png")}
+                        files = {"file": ("input.png", st.session_state["image_bytes"], "image/png")}
                         r = requests.post(f"{API_URL}/predict", files=files, timeout=40)
                         if not r.ok:
                             st.error(f"API error: {r.status_code} — {r.text[:300]}")
                         else:
                             data = r.json()
                             raw_prob = float(data.get("prob", 0.0))
-                            prob = to_cancer_prob(raw_prob, prob_semantics)
-                            label = "Cancer" if prob >= threshold else "Benign"
-
-                            m1, m2 = st.columns(2)
-                            with m1:
-                                st.metric("Cancer probability", f"{prob:.3f}", help=f"Decision threshold = {threshold:.2f}")
-                            with m2:
-                                st.metric("Predicted label", label)
-                            st.caption(
-                                f"Raw model prob: {raw_prob:.3f} · "
-                                f"If raw=P(cancer) → P(cancer)={raw_prob:.3f} · "
-                                f"If raw=P(benign) → P(cancer)={1.0 - raw_prob:.3f}"
-                            )
-
-                            b64 = data.get("overlay_png_b64")
-                            if b64:
-                                st.image(Image.open(io.BytesIO(base64.b64decode(b64))), caption="Heatmap Overlay")
-                            else:
-                                st.info("Heatmap unavailable for this image.")
+                            overlay_b64 = data.get("overlay_png_b64")
                 else:
                     engine = _get_engine_cached(weights_path)
-                    res = engine.predict_with_heatmap(image_bytes)
+                    res = engine.predict_with_heatmap(st.session_state["image_bytes"])
                     raw_prob = float(res.prob)
-                    prob = to_cancer_prob(raw_prob, prob_semantics)
-                    label = "Cancer" if prob >= threshold else "Benign"
+                    overlay_b64 = getattr(res, "overlay_png_b64", None)
+                    overlay_msg = getattr(res, "msg", None)
 
-                    m1, m2 = st.columns(2)
-                    with m1:
-                        st.metric("Cancer probability", f"{prob:.3f}", help=f"Decision threshold = {threshold:.2f}")
-                    with m2:
-                        st.metric("Predicted label", label)
-                    st.caption(
-                        f"Raw model prob: {raw_prob:.3f} · "
-                        f"If raw=P(cancer) → P(cancer)={raw_prob:.3f} · "
-                        f"If raw=P(benign) → P(cancer)={1.0 - raw_prob:.3f}"
+                # --- Interpret raw prob under chosen semantics ---
+                # Two possible interpretations:
+                #   If raw = P(cancer) -> P(cancer) = raw
+                #   If raw = P(benign) -> P(cancer) = 1 - raw
+                p_cancer_if_raw_is_cancer = raw_prob
+                p_cancer_if_raw_is_benign = 1.0 - raw_prob
+                prob = p_cancer_if_raw_is_cancer if PROB_SEMANTICS == "Cancer" else p_cancer_if_raw_is_benign
+                label = "Cancer" if prob >= threshold else "Benign"
+
+                mc1, mc2 = st.columns(2)
+                with mc1:
+                    st.metric(
+                        "Cancer probability (using mode assumption)",
+                        f"{prob:.3f}",
+                        help=f"Assuming raw = P({PROB_SEMANTICS.lower()}). Decision threshold = {threshold:.2f}"
                     )
+                with mc2:
+                    st.metric("Predicted label", label)
 
-                    if getattr(res, "overlay_png_b64", None):
-                        st.image(Image.open(io.BytesIO(base64.b64decode(res.overlay_png_b64))), caption="Heatmap Overlay")
-                    elif getattr(res, "msg", None):
-                        st.info(res.msg)
-                    else:
-                        st.info("Heatmap unavailable for this image.")
+                st.caption(
+                    f"Raw model prob = {raw_prob:.3f} · "
+                    f"If raw=P(cancer) ⇒ P(cancer)={p_cancer_if_raw_is_cancer:.3f} · "
+                    f"If raw=P(benign) ⇒ P(cancer)={p_cancer_if_raw_is_benign:.3f} · "
+                    f"Mode assumption: **raw=P({PROB_SEMANTICS.lower()})**"
+                )
+
+                if overlay_b64:
+                    st.image(Image.open(io.BytesIO(base64.b64decode(overlay_b64))), caption="Heatmap Overlay", use_container_width=True)
+                elif overlay_msg:
+                    st.info(overlay_msg)
+                else:
+                    st.info("Heatmap unavailable for this image.")
             except Exception as e:
                 st.toast(f"Request failed: {e}", icon="⚠️")
 
 st.divider()
 
-# ---------- Metrics + Plots (if generated by eval script) ----------
+# ======================================================================================
+# Metrics + Plots (optional artifacts)
+# ======================================================================================
 st.subheader("Model Evaluation")
 artifacts = Path("artifacts")
 summary_path = artifacts / "metrics_summary.json"
@@ -560,14 +610,11 @@ else:
     st.caption("No metrics_summary.json found. Run the evaluation script to generate one.")
 
 pcols = st.columns(3)
-try:
-    if cm_path.exists():
-        pcols[0].image(str(cm_path), caption="Confusion Matrix")
-    if roc_path.exists():
-        pcols[1].image(str(roc_path), caption="ROC Curve")
-    if pr_path.exists():
-        pcols[2].image(str(pr_path), caption="Precision–Recall Curve")
-except Exception as e:
-    st.caption(f"(Could not render evaluation plots: {e})")
+if cm_path.exists():
+    pcols[0].image(str(cm_path), caption="Confusion Matrix", use_container_width=True)
+if roc_path.exists():
+    pcols[1].image(str(roc_path), caption="ROC Curve", use_container_width=True)
+if pr_path.exists():
+    pcols[2].image(str(pr_path), caption="Precision–Recall Curve", use_container_width=True)
 
 st.markdown('<div class="footer-note">Note: Trained on LC25000 (lung & colon histopathology). Dataset is relatively clean; real-world performance may vary.</div>', unsafe_allow_html=True)
