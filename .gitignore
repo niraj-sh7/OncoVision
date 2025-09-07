@@ -1,0 +1,27 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.ipynb_checkpoints/
+
+# Envs
+.venv/
+venv/
+env/
+
+# Data / artifacts / weights
+data/
+artifacts/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# App secrets
+**/.streamlit/secrets.toml
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
