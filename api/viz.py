@@ -4,7 +4,6 @@ from PIL import Image
 import numpy as np
 import cv2
 
-# Simple Grad-CAM for last conv layer
 def _find_last_conv_module(model):
     last = None
     for m in model.modules():
@@ -24,24 +23,22 @@ def grad_cam_overlay(model, x, original: Image.Image):
     fh = target_layer.register_forward_hook(fwd_hook)
     bh = target_layer.register_full_backward_hook(bwd_hook)
 
-    out = model(x)  # forward has been done already usually
-    # assuming backward was called outside; but ensure here:
+    out = model(x)  
     if not grads:
         out.sum().backward()
 
     fh.remove(); bh.remove()
 
-    fmap = feats[-1][0]            # (C,H,W)
-    grad = grads[-1][0]            # (C,H,W)
-    weights = grad.mean(dim=(1,2)) # (C,)
+    fmap = feats[-1][0]            
+    grad = grads[-1][0]            
+    weights = grad.mean(dim=(1,2))
 
-    cam = (weights[:, None, None] * fmap).sum(0)  # (H,W)
+    cam = (weights[:, None, None] * fmap).sum(0)
     cam = F.relu(cam)
     cam = cam - cam.min()
     cam = cam / (cam.max() + 1e-8)
     cam = cam.cpu().numpy()
 
-    # resize to original and colorize
     orig = np.array(original)
     H, W = orig.shape[:2]
     cam_resized = cv2.resize(cam, (W, H))

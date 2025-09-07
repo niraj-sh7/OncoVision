@@ -11,11 +11,11 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-engine = InferenceEngine()  # lazy-loads model on first call
+engine = InferenceEngine()  
 
 class PredictOut(BaseModel):
     prob_cancer: float
-    heatmap_png_b64: Optional[str]  # base64 PNG of overlay
+    heatmap_png_b64: Optional[str]  
     message: Optional[str] = None
 
 @app.get("/health")

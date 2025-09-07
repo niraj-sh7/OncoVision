@@ -1,4 +1,3 @@
-# training/prep_lc25000_binary.py
 import shutil, random, os, pathlib, sys, glob
 
 random.seed(1337)
@@ -14,7 +13,6 @@ def find_root():
       - data/lung-and-colon-cancer-histopathological-images/lung_colon_image_set/...
       - or any nested variant.
     """
-    # 1) direct guess
     candidates = [
         DATA / "lung_colon_image_set",
         DATA / "lung-and-colon-cancer-histopathological-images" / "lung_colon_image_set",
@@ -23,7 +21,6 @@ def find_root():
         if (c / "colon_image_sets").exists() and (c / "lung_image_sets").exists():
             return c
 
-    # 2) recursive search for a folder that has both subfolders
     for p in DATA.rglob("*"):
         if p.is_dir():
             if (p / "colon_image_sets").exists() and (p / "lung_image_sets").exists():
@@ -57,7 +54,6 @@ def main(limit_per_class=None):
         lung  / "lung_n",
     ]
 
-    # sanity
     for f in malignant_folders + benign_folders:
         if not f.exists():
             print(f"WARNING: Expected folder missing: {f}")
@@ -75,7 +71,6 @@ def main(limit_per_class=None):
 
     print(f"Found malignant: {len(mal)} | benign: {len(ben)}")
 
-    # build output tree
     for split in ["train", "val"]:
         for cls in ["cancer", "normal"]:
             (OUT / split / cls).mkdir(parents=True, exist_ok=True)
@@ -102,6 +97,5 @@ def main(limit_per_class=None):
         print(d, "->", len(list(d.glob("*.jpg"))) + len(list(d.glob("*.jpeg"))) + len(list(d.glob("*.png"))), "images")
 
 if __name__ == "__main__":
-    # Optional: pass a small limit to test quickly, e.g., python training/prep_lc25000_binary.py 500
     lim = int(sys.argv[1]) if len(sys.argv) > 1 else None
     main(limit_per_class=lim)

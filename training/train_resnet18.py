@@ -47,7 +47,6 @@ def main():
             loss.backward()
             optimizer.step()
 
-        # val
         model.eval()
         correct = 0; total = 0
         with torch.no_grad():

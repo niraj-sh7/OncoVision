@@ -1,4 +1,3 @@
-# ui/streamlit_app.py
 import os, io, json, base64, math, zipfile, subprocess, re
 from pathlib import Path
 from typing import Optional
@@ -7,7 +6,6 @@ import requests
 import streamlit as st
 from PIL import Image
 
-# ---------- Page setup ----------
 st.set_page_config(page_title="OncoVision: Your Histopathology Assistant", layout="wide")
 st.markdown(
     """
@@ -21,24 +19,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------- Config / Secrets ----------
 API_DEFAULT = os.getenv("API_URL", "http://localhost:8000")
 API_URL = st.secrets.get("API_URL", API_DEFAULT)
 
-# Try to import your project engine; we might still force-inline later.
 INLINE_ENGINE = False
 try:
-    from api.inference import InferenceEngine as _Engine  # your package's engine
+    from api.inference import InferenceEngine as _Engine  
 except Exception:
     _Engine = None
     INLINE_ENGINE = True
 
-# Allow overriding via env: ONCOVISION_FORCE_INLINE=1
 FORCE_INLINE = os.getenv("ONCOVISION_FORCE_INLINE") == "1"
 if FORCE_INLINE:
     INLINE_ENGINE = True
 
-# ---------- Sidebar ----------
 st.sidebar.header("Settings")
 run_mode = st.sidebar.radio("Run mode", ["Remote API", "Local (in-app)"], index=1)
 API_URL = st.sidebar.text_input(
@@ -57,7 +51,6 @@ threshold = st.sidebar.slider("Decision threshold (Cancer)", 0.00, 1.00, 0.50, 0
 st.sidebar.caption("Prediction ≥ threshold → label = Cancer (else Benign)")
 st.sidebar.markdown('<span class="badge">Research demo</span>', unsafe_allow_html=True)
 
-# ---------- Header ----------
 colh1, colh2 = st.columns([0.75, 0.25])
 with colh1:
     st.title("OncoVision — Histopathology AI Assistant")
@@ -82,9 +75,6 @@ with colh2:
 
 st.divider()
 
-# ======================================================================
-# 🌐 Kaggle sample gallery (LC25000) — improved labeling & filtering
-# ======================================================================
 KAGGLE_DATASET = "andrewmvd/lung-and-colon-cancer-histopathological-images"
 KAGGLE_CACHE = Path("data/kaggle_lc25000")
 KAGGLE_ZIP = KAGGLE_CACHE / "lc25000.zip"
@@ -108,7 +98,6 @@ def download_kaggle_dataset():
     with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
         zf.extractall(KAGGLE_CACHE)
 
-# LC25000-aware class inference
 POS_TOKENS = {
     "adenocarcinoma", "carcinoma", "malignant", "cancer",
     "aca", "lung_aca", "colon_aca",
@@ -155,7 +144,7 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                     try:
                         download_kaggle_dataset()
                         st.success("Dataset ready.")
-                        st.session_state.pop("kaggle_index", None)  # rebuild index
+                        st.session_state.pop("kaggle_index", None)  
                         st.rerun()
                     except Exception as e:
                         st.error(f"Download failed: {e}")
@@ -223,17 +212,14 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
 
 st.divider()
 
-# ---------- Upload ----------
 uploaded = st.file_uploader("Upload image", type=["png", "jpg", "jpeg"])
 
-# Unify source of truth for the image
 image_bytes: Optional[bytes] = st.session_state.get("image_bytes")
 if image_bytes is None and uploaded is not None:
     image_bytes = uploaded.read()
     st.session_state["image_bytes"] = image_bytes
     st.session_state["from_sample"] = "uploaded_file"
 
-# ---------- Local engine loader (robust) ----------
 def get_local_engine(weights_path: str):
     """
     Return an InferenceEngine instance.
@@ -245,33 +231,29 @@ def get_local_engine(weights_path: str):
     global INLINE_ENGINE
 
     if not INLINE_ENGINE and _Engine is not None:
-        # Try keyword argument
         try:
             eng = _Engine(weights_path=weights_path)
             return eng
         except TypeError:
             pass
 
-        # Try positional path
         try:
-            eng = _Engine(weights_path)  # type: ignore
+            eng = _Engine(weights_path)  
             return eng
         except TypeError:
             pass
 
-        # Try no-arg + optional load_weights
         try:
             eng = _Engine()
             if hasattr(eng, "load_weights"):
                 try:
-                    eng.load_weights(weights_path)  # type: ignore
+                    eng.load_weights(weights_path)  
                 except Exception:
                     pass
             return eng
         except TypeError:
             INLINE_ENGINE = True
 
-    # ---- INLINE FALLBACK ----
     import io as _io, base64 as _b64
     from dataclasses import dataclass
     from typing import Optional as _Opt, List as _List
@@ -281,8 +263,7 @@ def get_local_engine(weights_path: str):
     import torchvision.transforms as _T
     import torch.nn as _nn
     from torchvision import models as _models
-    from matplotlib import colormaps as _colormaps  # <-- modern API
-
+    from matplotlib import colormaps as _colormaps 
     @dataclass
     class HeatmapResult:
         prob: float
@@ -325,7 +306,6 @@ def get_local_engine(weights_path: str):
                 mode="bilinear", align_corners=False
             )[0,0].cpu().numpy()
 
-            # modern colormap access
             cmap = _colormaps["jet"]
             color = cmap(cam)[:, :, :3]
 
@@ -385,15 +365,12 @@ def get_local_engine(weights_path: str):
 
     return _InlineEngine(weights_path=weights_path)
 
-# Cache a single local engine per weights path
 @st.cache_resource(show_spinner=False)
 def _get_engine_cached(path: str):
     return get_local_engine(path)
 
-# ---------- Main area ----------
 left, right = st.columns([0.55, 0.45])
 
-# Input preview
 with left:
     st.subheader("Input")
     if image_bytes:
@@ -408,7 +385,6 @@ with left:
     else:
         st.info("Upload an image or choose a Kaggle sample above to begin.")
 
-# Prediction
 with right:
     st.subheader("Prediction")
     analyze_disabled = (not image_bytes) or (not ok)
@@ -464,7 +440,6 @@ with right:
 
 st.divider()
 
-# ---------- Metrics + Plots (if generated by eval script) ----------
 st.subheader("Model Evaluation")
 artifacts = Path("artifacts")
 summary_path = artifacts / "metrics_summary.json"

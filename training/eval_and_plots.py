@@ -1,4 +1,3 @@
-# training/eval_and_plots.py
 import argparse, json, os
 import numpy as np
 import torch, torch.nn as nn
@@ -13,9 +12,8 @@ def load_model(weights_path, imagenet=False, device="cpu"):
     else:
         m = models.resnet18(weights=None)
     m.fc = nn.Linear(m.fc.in_features, 1)
-    # Try to load safely if supported; fall back otherwise
     try:
-        state = torch.load(weights_path, map_location="cpu", weights_only=True)  # PyTorch >=2.4
+        state = torch.load(weights_path, map_location="cpu", weights_only=True)  
     except TypeError:
         state = torch.load(weights_path, map_location="cpu")
     m.load_state_dict(state, strict=False)
@@ -33,13 +31,11 @@ def infer_class_indices(class_to_idx: dict):
     for name, idx in class_to_idx.items():
         key = name.lower()
         if ("normal" in key) or ("benign" in key):
-            # prefer explicit 0_ prefix if present
             if key.startswith("0_") or key == "0_normal":
                 idx_normal = idx
             elif idx_normal is None:
                 idx_normal = idx
         if "cancer" in key:
-            # prefer explicit 1_ prefix if present
             if key.startswith("1_") or key == "1_cancer":
                 idx_cancer = idx
             elif idx_cancer is None:
@@ -54,8 +50,6 @@ def main():
     ap.add_argument("--out_dir", default="artifacts")
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--num_workers", type=int, default=4)
-    # If your checkpoint’s sigmoid outputs P(normal), set this to 1 to invert.
-    # If not provided, we’ll auto-guess from class_to_idx.
     ap.add_argument("--prob_is_normal", type=int, choices=[0,1], default=None)
     args = ap.parse_args()
 
@@ -73,7 +67,6 @@ def main():
     val = datasets.ImageFolder(val_root, transform=tfm)
     print("class_to_idx:", val.class_to_idx)
 
-    # Figure out which indices are normal vs cancer
     idx_normal, idx_cancer = infer_class_indices(val.class_to_idx)
     if idx_normal is None or idx_cancer is None:
         raise SystemExit(
@@ -81,8 +74,6 @@ def main():
             "Make sure folders are named like '0_normal'/'1_cancer' or 'normal'/'cancer'."
         )
 
-    # Heuristic: if dataset labels are {'cancer':0, 'normal':1}, many older checkpoints output P(normal).
-    # Let user override with --prob_is_normal.
     if args.prob_is_normal is None:
         prob_is_normal = (idx_cancer == 0 and idx_normal == 1)
     else:
@@ -99,9 +90,8 @@ def main():
     y_true_all, y_prob_all = [], []
     with torch.no_grad():
         for x, y in loader:
-            logits = model(x.to(device))              # [B,1]
-            p_model = torch.sigmoid(logits).squeeze(1).cpu().numpy()  # default: model's positive class
-            # Convert to P(cancer):
+            logits = model(x.to(device))             
+            p_model = torch.sigmoid(logits).squeeze(1).cpu().numpy()  
             if prob_is_normal:
                 p_cancer = 1.0 - p_model
             else:
@@ -112,17 +102,13 @@ def main():
     y_true = np.array(y_true_all)
     y_prob = np.array(y_prob_all)
 
-    # Map labels to {0,1} = {normal,cancer} and mask any stray classes
     mask = (y_true == idx_normal) | (y_true == idx_cancer)
     y_true = y_true[mask]
     y_prob = y_prob[mask]
-    # Convert ground truth to 0/1 (0=normal, 1=cancer)
     y_true = (y_true == idx_cancer).astype(int)
 
-    # Predictions at 0.5 threshold (you can change later)
     y_pred = (y_prob > 0.5).astype(int)
 
-    # Confusion matrix & metrics
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
     tn, fp, fn, tp = cm.ravel()
     total = max(1, (tp + tn + fp + fn))
@@ -130,13 +116,11 @@ def main():
     prec = tp / max(1, (tp + fp))
     rec = tp / max(1, (tp + fn))
 
-    # ROC / PR using P(cancer)
     fpr, tpr, _ = roc_curve(y_true, y_prob)
     roc_auc = auc(fpr, tpr)
     prec_curve, rec_curve, _ = precision_recall_curve(y_true, y_prob)
     pr_auc = auc(rec_curve, prec_curve)
 
-    # Save JSON summary
     summary = {
         "acc": acc, "precision": prec, "recall": rec,
         "roc_auc": roc_auc, "pr_auc": pr_auc,
@@ -151,8 +135,6 @@ def main():
         json.dump(summary, f, indent=2)
     print("Saved metrics_summary.json:", summary)
 
-    # --- Plots ---
-    # Confusion Matrix
     plt.figure(figsize=(4, 4))
     plt.imshow(cm, cmap="Blues")
     plt.title("Confusion Matrix")
@@ -165,7 +147,6 @@ def main():
     cm_path = os.path.join(args.out_dir, "confusion_matrix.png")
     plt.savefig(cm_path, dpi=220); plt.close()
 
-    # ROC
     plt.figure(figsize=(5, 4))
     plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.2f}")
     plt.plot([0, 1], [0, 1], '--', alpha=0.6)
@@ -175,7 +156,6 @@ def main():
     roc_path = os.path.join(args.out_dir, "roc_curve.png")
     plt.savefig(roc_path, dpi=220); plt.close()
 
-    # PR
     plt.figure(figsize=(5, 4))
     plt.plot(rec_curve, prec_curve, label=f"AUC = {pr_auc:.2f}")
     plt.xlabel("Recall"); plt.ylabel("Precision")

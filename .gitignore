@@ -1,19 +1,10 @@
-﻿# --- Python ---
-__pycache__/
+﻿__pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# --- Virtual environment ---
 .venv/
-
-# --- Local datasets (can be huge) ---
 data/
-
-# --- OS / Editor junk ---
 .DS_Store
 Thumbs.db
-
-# --- Logs / temp ---
 *.log
 *.tmp
