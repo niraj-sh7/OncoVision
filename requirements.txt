@@ -9,3 +9,4 @@ numpy==1.26.4
 opencv-python-headless==4.9.0.80
 matplotlib==3.9.0
 streamlit==1.37.0
+ 
