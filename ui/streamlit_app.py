@@ -6,6 +6,14 @@ import requests
 import streamlit as st
 from PIL import Image
 
+from packaging.version import Version
+IMG_KW = (
+    {"use_container_width": True}
+    if Version(st.__version__) >= Version("1.32.0")
+    else {"use_column_width": True}
+)
+
+
 # ======================================================================================
 # Kaggle credentials bootstrap (supports either KAGGLE_USERNAME/KEY or kaggle_json)
 # ======================================================================================
@@ -282,7 +290,7 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
                                 </div>
                             """
                             st.markdown(badge, unsafe_allow_html=True)
-                            st.image(img, caption=p.name, use_column_width=True)
+                            st.image(img, caption=p.name, **IMG_KW)
                             if st.button(f"Use {p.name}", key=f"btn_use_kaggle_{p.name}_{i}"):
                                 buf = io.BytesIO(); img.save(buf, format="PNG")
                                 st.session_state["image_bytes"] = buf.getvalue()
@@ -504,7 +512,7 @@ with left:
     if image_bytes:
         try:
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            st.image(img, use_column_width=True)
+            st.image(img, **IMG_KW)
             src = st.session_state.get("from_sample")
             if src:
                 st.caption(f"Source: {src}")
@@ -517,7 +525,7 @@ with left:
 with right:
     st.subheader("Prediction")
     analyze_disabled = (st.session_state.get("image_bytes") is None) or (not ok)
-    if st.button("Analyze", type="primary", disabled=analyze_disabled, use_column_width=True, key="btn_analyze"):
+    if st.button("Analyze", type="primary", disabled=analyze_disabled, key="btn_analyze"):
         if st.session_state.get("image_bytes") is None:
             st.error("Please select or upload an image first.")
         else:
@@ -573,7 +581,7 @@ with right:
                 )
 
                 if overlay_b64:
-                    st.image(Image.open(io.BytesIO(base64.b64decode(overlay_b64))), caption="Heatmap Overlay", use_column_width=True)
+                    st.image(Image.open(io.BytesIO(base64.b64decode(overlay_b64))), caption="Heatmap Overlay", **IMG_KW)
                 elif overlay_msg:
                     st.info(overlay_msg)
                 else:
@@ -611,10 +619,10 @@ else:
 
 pcols = st.columns(3)
 if cm_path.exists():
-    pcols[0].image(str(cm_path), caption="Confusion Matrix", use_column_width=True)
+    pcols[0].image(str(cm_path), caption="Confusion Matrix", **IMG_KW)
 if roc_path.exists():
-    pcols[1].image(str(roc_path), caption="ROC Curve", use_column_width=True)
+    pcols[1].image(str(roc_path), caption="ROC Curve", **IMG_KW)
 if pr_path.exists():
-    pcols[2].image(str(pr_path), caption="Precision–Recall Curve", use_column_width=True)
+    pcols[2].image(str(pr_path), caption="Precision–Recall Curve", **IMG_KW)
 
 st.markdown('<div class="footer-note">Note: Trained on LC25000 (lung & colon histopathology). Dataset is relatively clean; real-world performance may vary.</div>', unsafe_allow_html=True)
