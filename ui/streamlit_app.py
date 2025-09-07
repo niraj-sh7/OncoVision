@@ -340,17 +340,18 @@ with cc1:
 # ──────────────────────────────────────────────────────────────────────────────
 # Determine probability semantics (source-aware auto, with optional override)
 # ──────────────────────────────────────────────────────────────────────────────
-source_kind = st.session_state.get("source_kind")  # "kaggle" | "upload" | None
+src = st.session_state.get("from_sample")
+
 if sem_choice == "Auto (by run mode)":
-    if source_kind == "kaggle":
-        PROB_SEMANTICS = "Cancer"     # raw = P(cancer)
-    elif source_kind == "upload":
-        PROB_SEMANTICS = "Benign"     # raw = P(benign)
+    if src == "uploaded_file":
+        PROB_SEMANTICS = "Benign"   # raw = P(benign) for uploads
+    elif isinstance(src, str) and "•" in src:
+        PROB_SEMANTICS = "Cancer"   # raw = P(cancer) for Kaggle samples
     else:
-        # Fallback if no/unknown image yet: keep previous run-mode default
+        # fallback if nothing is selected yet
         PROB_SEMANTICS = "Cancer" if run_mode == "Remote API" else "Benign"
 else:
-    PROB_SEMANTICS = sem_choice  # explicit override: "Cancer" or "Benign"
+    PROB_SEMANTICS = sem_choice  # explicit override from sidebar
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Inference engine (local fallback) — imports only when needed
