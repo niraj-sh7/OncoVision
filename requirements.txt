@@ -10,3 +10,8 @@ opencv-python-headless==4.9.0.80
 matplotlib==3.9.0
 streamlit==1.37.0
 kaggle==1.7.4.5
+pillow
+requests
+torch
+torchvision
+matplotlib
