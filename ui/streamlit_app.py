@@ -1,13 +1,15 @@
-import os, io, json, base64, math, zipfile, subprocess, re
+import os, io, json, base64, math, zipfile, subprocess, re, shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Tuple
 
 import requests
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True  # tolerate slightly broken JPEGs
 
-
-# -- Kaggle creds bootstrap --
+# =========================
+# Kaggle creds bootstrap
+# =========================
 if "KAGGLE_USERNAME" in st.secrets and "KAGGLE_KEY" in st.secrets:
     os.environ["KAGGLE_USERNAME"] = st.secrets["KAGGLE_USERNAME"]
     os.environ["KAGGLE_KEY"] = st.secrets["KAGGLE_KEY"]
@@ -15,9 +17,14 @@ elif "kaggle_json" in st.secrets:
     kaggle_dir = Path.home() / ".kaggle"
     kaggle_dir.mkdir(parents=True, exist_ok=True)
     (kaggle_dir / "kaggle.json").write_text(st.secrets["kaggle_json"])
-    os.chmod(kaggle_dir / "kaggle.json", 0o600)
+    try:
+        os.chmod(kaggle_dir / "kaggle.json", 0o600)
+    except Exception:
+        pass  # ignore on restricted platforms
 
-# ---------- Page setup ----------
+# ==============
+# Page setup
+# ==============
 st.set_page_config(page_title="OncoVision: Your Histopathology Assistant", layout="wide")
 st.markdown(
     """
@@ -31,7 +38,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------- Config / Secrets ----------
+# ==============
+# Config / Secrets
+# ==============
 API_DEFAULT = os.getenv("API_URL", "http://localhost:8000")
 API_URL = st.secrets.get("API_URL", API_DEFAULT)
 
@@ -48,7 +57,9 @@ FORCE_INLINE = os.getenv("ONCOVISION_FORCE_INLINE") == "1"
 if FORCE_INLINE:
     INLINE_ENGINE = True
 
-# ---------- Sidebar ----------
+# ==============
+# Sidebar
+# ==============
 st.sidebar.header("Settings")
 # Default to Local (in-app) so it works out of the box
 run_mode = st.sidebar.radio("Run mode", ["Remote API", "Local (in-app)"], index=1)
@@ -68,7 +79,9 @@ threshold = st.sidebar.slider("Decision threshold (Cancer)", 0.00, 1.00, 0.50, 0
 st.sidebar.caption("Prediction ≥ threshold → label = Cancer (else Benign)")
 st.sidebar.markdown('<span class="badge">Research demo</span>', unsafe_allow_html=True)
 
-# ---------- Header ----------
+# ==============
+# Header
+# ==============
 colh1, colh2 = st.columns([0.75, 0.25])
 with colh1:
     st.title("OncoVision — Histopathology AI Assistant")
@@ -93,11 +106,13 @@ with colh2:
 
 st.divider()
 
+# =========================
+# Kaggle dataset handling
+# =========================
 KAGGLE_DATASET = "andrewmvd/lung-and-colon-cancer-histopathological-images"
 KAGGLE_CACHE = Path("data/kaggle_lc25000")
 KAGGLE_ZIP = KAGGLE_CACHE / "lc25000.zip"
 
-# --- Kaggle secrets bootstrap ---
 def ensure_kaggle_credentials_from_secrets() -> bool:
     """
     If Streamlit secrets has KAGGLE creds, write ~/.kaggle/kaggle.json
@@ -108,15 +123,13 @@ def ensure_kaggle_credentials_from_secrets() -> bool:
     creds = st.secrets["KAGGLE"]
     if not creds or "username" not in creds or "key" not in creds:
         return False
-    home = Path.home()
-    kaggle_dir = home / ".kaggle"
+    kaggle_dir = Path.home() / ".kaggle"
     kaggle_dir.mkdir(parents=True, exist_ok=True)
     f = kaggle_dir / "kaggle.json"
     f.write_text(json.dumps({"username": creds["username"], "key": creds["key"]}))
     try:
         os.chmod(f, 0o600)
     except Exception:
-        # On some platforms chmod may be restricted; ignore.
         pass
     return True
 
@@ -130,6 +143,18 @@ def have_kaggle_creds() -> bool:
     candidate2 = Path(os.environ.get("USERPROFILE", "")) / ".kaggle" / "kaggle.json"
     return candidate1.exists() or candidate2.exists()
 
+def _unzip_all_in(folder: Path) -> None:
+    """Recursively unzip every .zip inside folder, then remove the .zip."""
+    for inner_zip in sorted(folder.rglob("*.zip")):
+        try:
+            target = inner_zip.parent / inner_zip.stem
+            target.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(inner_zip, "r") as zf:
+                zf.extractall(target)
+            inner_zip.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"Skipping {inner_zip}: {e}")
+
 def download_kaggle_dataset():
     KAGGLE_CACHE.mkdir(parents=True, exist_ok=True)
 
@@ -138,27 +163,38 @@ def download_kaggle_dataset():
         return
 
     if not KAGGLE_ZIP.exists():
-        cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
-        subprocess.run(cmd, check=True)
-        zips = list(KAGGLE_CACHE.glob("*.zip"))
-        if zips:
-            zips[0].rename(KAGGLE_ZIP)
+        # Try CLI
+        try:
+            cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
+            subprocess.run(cmd, check=True)
+            zips = list(KAGGLE_CACHE.glob("*.zip"))
+            if zips:
+                zips[0].rename(KAGGLE_ZIP)
+        except Exception:
+            # Fallback: Python API
+            from kaggle.api.kaggle_api_extended import KaggleApi
+            api = KaggleApi()
+            api.authenticate()
+            api.dataset_download_files(KAGGLE_DATASET, path=str(KAGGLE_CACHE), unzip=False)
+            zips = list(KAGGLE_CACHE.glob("*.zip"))
+            if zips and not KAGGLE_ZIP.exists():
+                zips[0].rename(KAGGLE_ZIP)
 
     # First unzip main archive
     with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
         zf.extractall(KAGGLE_CACHE)
 
     # Unzip any nested zips (LC25000 has colon/lung sub-archives)
-    for inner_zip in KAGGLE_CACHE.rglob("*.zip"):
-        try:
-            with zipfile.ZipFile(inner_zip, "r") as zf:
-                target_dir = inner_zip.parent / inner_zip.stem
-                target_dir.mkdir(parents=True, exist_ok=True)
-                zf.extractall(target_dir)
-            inner_zip.unlink()  # remove zip after extracting
-        except Exception as e:
-            print(f"Skipping {inner_zip}: {e}")
+    _unzip_all_in(KAGGLE_CACHE)
 
+# -------- image verification to prevent "Image unreadable" ------
+def _is_image_ok(p: Path) -> bool:
+    try:
+        with Image.open(p) as im:
+            im.verify()
+        return True
+    except Exception:
+        return False
 
 # LC25000-aware class inference
 POS_TOKENS = {
@@ -182,15 +218,20 @@ def infer_class_from_path(p: Path) -> str:
         return "0_normal"
     return "unknown"
 
-def build_kaggle_index():
-    exts = {".png", ".jpg", ".jpeg"}
-    items = []
+def build_kaggle_index() -> List[Tuple[str, Path]]:
+    exts = {".png", ".jpg", ".jpeg", ".PNG", ".JPG", ".JPEG"}
+    items: List[Tuple[str, Path]] = []
     if not KAGGLE_CACHE.exists():
         return items
+    skipped = 0
     for p in KAGGLE_CACHE.rglob("*"):
-        if p.suffix.lower() in exts:
-            cls = infer_class_from_path(p)
-            items.append((cls, p))
+        if p.is_file() and p.suffix in exts:
+            if _is_image_ok(p):
+                items.append((infer_class_from_path(p), p))
+            else:
+                skipped += 1
+    if skipped:
+        st.caption(f"Skipped {skipped} non-image/broken files during index.")
     return items
 
 with st.expander("Try sample images from Kaggle (LC25000)"):
@@ -200,17 +241,23 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
             "[KAGGLE]\nusername=\"...\"\nkey=\"...\"\nThen restart the app."
         )
     else:
-        co_dl, co_stats = st.columns([1,1])
+        co_dl, co_stats, co_reset = st.columns([1,1,1])
         with co_dl:
             if st.button("Download / Refresh LC25000"):
-                with st.spinner("Downloading from Kaggle… first time may take a few minutes"):
-                    try:
-                        download_kaggle_dataset()
-                        st.success("Dataset ready.")
-                        st.session_state.pop("kaggle_index", None)  # rebuild index
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Download failed: {e}")
+                with st.spinner("Downloading / preparing LC25000… first time may take a few minutes"):
+                    download_kaggle_dataset()
+                    st.success("Dataset ready.")
+                    st.session_state.pop("kaggle_index", None)  # rebuild index
+                    st.rerun()  # trigger a clean refresh (won't show as error)
+        with co_reset:
+            if st.button("Reset Kaggle cache"):
+                try:
+                    shutil.rmtree(KAGGLE_CACHE)
+                except FileNotFoundError:
+                    pass
+                st.session_state.pop("kaggle_index", None)
+                st.success("Cache cleared. Click Download / Refresh again.")
+                st.rerun()
 
         if "kaggle_index" not in st.session_state:
             st.session_state["kaggle_index"] = build_kaggle_index()
@@ -219,12 +266,6 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
         if not idx:
             st.info("No images indexed yet. Click “Download / Refresh LC25000”.")
         else:
-            unknown = [p for c, p in idx if c == "unknown"]
-            if unknown:
-                with st.expander(f"⚠️ {len(unknown)} items still labeled 'Unknown' — preview a few paths"):
-                    for p in unknown[:30]:
-                        st.code(str(p))
-
             classes = sorted({cls for cls, _ in idx})
             LABEL_MAP = {"0_normal": "Benign / Normal", "1_cancer": "Cancer", "unknown": "Unknown"}
             COLOR_MAP = {"0_normal": "#0ea5e9", "1_cancer": "#ef4444", "unknown": "#64748b"}
@@ -275,7 +316,9 @@ with st.expander("Try sample images from Kaggle (LC25000)"):
 
 st.divider()
 
-# ---------- Upload ----------
+# ==========
+# Upload
+# ==========
 uploaded = st.file_uploader("Upload image", type=["png", "jpg", "jpeg"])
 
 # Unify source of truth for the image
@@ -285,7 +328,9 @@ if image_bytes is None and uploaded is not None:
     st.session_state["image_bytes"] = image_bytes
     st.session_state["from_sample"] = "uploaded_file"
 
-# ---------- Local engine loader (robust) ----------
+# ===========================
+# Local engine loader (robust)
+# ===========================
 def get_local_engine(weights_path: str):
     """
     Return an InferenceEngine instance.
@@ -303,14 +348,12 @@ def get_local_engine(weights_path: str):
             return eng
         except TypeError:
             pass
-
         # Try positional path
         try:
             eng = _Engine(weights_path)  # type: ignore
             return eng
         except TypeError:
             pass
-
         # Try no-arg + optional load_weights
         try:
             eng = _Engine()
@@ -441,12 +484,21 @@ def get_local_engine(weights_path: str):
 def _get_engine_cached(path: str):
     return get_local_engine(path)
 
-# ---------- Main area ----------
+# ==========
+# Main area
+# ==========
 left, right = st.columns([0.55, 0.45])
 
 # Input preview
 with left:
     st.subheader("Input")
+    image_bytes: Optional[bytes] = st.session_state.get("image_bytes")
+    uploaded = st.file_uploader("Upload image", type=["png", "jpg", "jpeg"])
+    if image_bytes is None and uploaded is not None:
+        image_bytes = uploaded.read()
+        st.session_state["image_bytes"] = image_bytes
+        st.session_state["from_sample"] = "uploaded_file"
+
     if image_bytes:
         try:
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -462,8 +514,9 @@ with left:
 # Prediction
 with right:
     st.subheader("Prediction")
-    analyze_disabled = (not image_bytes) or (not ok)
+    analyze_disabled = (not st.session_state.get("image_bytes")) or (not ok)
     if st.button("Analyze", type="primary", disabled=analyze_disabled, use_container_width=True):
+        image_bytes = st.session_state.get("image_bytes")
         if not image_bytes:
             st.error("Please select or upload an image first.")
         else:
@@ -480,13 +533,11 @@ with right:
                             data = r.json()
                             prob = float(data.get("prob", 0.0))
                             label = "Cancer" if prob >= threshold else "Benign"
-
                             m1, m2 = st.columns(2)
                             with m1:
                                 st.metric("Cancer probability", f"{prob:.3f}", help=f"Decision threshold = {threshold:.2f}")
                             with m2:
                                 st.metric("Predicted label", label)
-
                             b64 = data.get("overlay_png_b64")
                             if b64:
                                 st.image(Image.open(io.BytesIO(base64.b64decode(b64))), caption="Heatmap Overlay", use_container_width=True)
@@ -497,13 +548,11 @@ with right:
                     res = engine.predict_with_heatmap(image_bytes)
                     prob = float(res.prob)
                     label = "Cancer" if prob >= threshold else "Benign"
-
                     m1, m2 = st.columns(2)
                     with m1:
                         st.metric("Cancer probability", f"{prob:.3f}", help=f"Decision threshold = {threshold:.2f}")
                     with m2:
                         st.metric("Predicted label", label)
-
                     if getattr(res, "overlay_png_b64", None):
                         st.image(Image.open(io.BytesIO(base64.b64decode(res.overlay_png_b64))), caption="Heatmap Overlay", use_container_width=True)
                     elif getattr(res, "msg", None):
