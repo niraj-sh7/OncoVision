@@ -1,9 +1,9 @@
-# OncoVision — Histopathology AI Assistant (Hackathon Starter)
+# OncoVision: Histopathology AI Assistant
 
 End-to-end demo that classifies **histology patches** as suspicious/benign and returns an **explainability heatmap (Grad-CAM)**.
 
 ## Features
-- **FastAPI** backend: `/predict` for image upload → JSON with probability + heatmap.
+- **FastAPI** backend: `/predict` for image upload --> JSON with probability + heatmap.
 - **PyTorch** model: Transfer-learning with **ResNet18** (ImageNet) for binary classification.
 - **Grad-CAM**: Visual overlay to highlight regions driving the prediction.
 - **Streamlit** demo UI: drag & drop an image, see probability + heatmap instantly.
