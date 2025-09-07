@@ -132,23 +132,33 @@ def have_kaggle_creds() -> bool:
 
 def download_kaggle_dataset():
     KAGGLE_CACHE.mkdir(parents=True, exist_ok=True)
+
+    # If already extracted with images, return early
     if any(KAGGLE_CACHE.rglob("*.png")) or any(KAGGLE_CACHE.rglob("*.jpg")):
         return
-    try:
-        if not KAGGLE_ZIP.exists():
-            cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
-            subprocess.run(cmd, check=True)
-            zips = list(KAGGLE_CACHE.glob("*.zip"))
-            if zips:
-                zips[0].rename(KAGGLE_ZIP)
-        with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
-            zf.extractall(KAGGLE_CACHE)
-    except Exception:
-        # Fallback to Python API
-        from kaggle.api.kaggle_api_extended import KaggleApi
-        api = KaggleApi()
-        api.authenticate()
-        api.dataset_download_files(KAGGLE_DATASET, path=str(KAGGLE_CACHE), unzip=True)
+
+    if not KAGGLE_ZIP.exists():
+        cmd = ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", str(KAGGLE_CACHE)]
+        subprocess.run(cmd, check=True)
+        zips = list(KAGGLE_CACHE.glob("*.zip"))
+        if zips:
+            zips[0].rename(KAGGLE_ZIP)
+
+    # First unzip main archive
+    with zipfile.ZipFile(KAGGLE_ZIP, "r") as zf:
+        zf.extractall(KAGGLE_CACHE)
+
+    # Unzip any nested zips (LC25000 has colon/lung sub-archives)
+    for inner_zip in KAGGLE_CACHE.rglob("*.zip"):
+        try:
+            with zipfile.ZipFile(inner_zip, "r") as zf:
+                target_dir = inner_zip.parent / inner_zip.stem
+                target_dir.mkdir(parents=True, exist_ok=True)
+                zf.extractall(target_dir)
+            inner_zip.unlink()  # remove zip after extracting
+        except Exception as e:
+            print(f"Skipping {inner_zip}: {e}")
+
 
 # LC25000-aware class inference
 POS_TOKENS = {
