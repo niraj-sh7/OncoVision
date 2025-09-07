@@ -1,0 +1,19 @@
+{
+  "acc": 0.9984,
+  "precision": 0.9986666666666667,
+  "recall": 0.9986666666666667,
+  "roc_auc": 0.9999840000000001,
+  "pr_auc": 0.9999893838591647,
+  "tn": 998,
+  "fp": 2,
+  "fn": 2,
+  "tp": 1498,
+  "class_to_idx": {
+    "cancer": 0,
+    "normal": 1
+  },
+  "idx_normal": 1,
+  "idx_cancer": 0,
+  "prob_is_normal": false,
+  "n_eval": 2500
+}

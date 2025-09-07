@@ -1,27 +1,19 @@
-﻿# Python
+﻿# --- Python ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.egg-info/
-.ipynb_checkpoints/
 
-# Envs
+# --- Virtual environment ---
 .venv/
-venv/
-env/
 
-# Data / artifacts / weights
+# --- Local datasets (can be huge) ---
 data/
-artifacts/
-*.pt
-*.pth
-*.ckpt
-*.onnx
 
-# App secrets
-**/.streamlit/secrets.toml
-
-# OS/editor noise
+# --- OS / Editor junk ---
 .DS_Store
 Thumbs.db
+
+# --- Logs / temp ---
+*.log
+*.tmp
