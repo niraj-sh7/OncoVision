@@ -23,7 +23,6 @@ pip install -r requirements.txt
 ### 2) Start the API
 ```bash
 uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
-# Swagger: http://localhost:8000/docs
 ```
 
 ### 3) Run the demo UI
