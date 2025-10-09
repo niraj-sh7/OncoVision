@@ -31,7 +31,7 @@ streamlit run ui/streamlit_app.py
 ```
 
 ### 4) (Optional) Fine-tune the model
-- Drop a small folder dataset like:
+- Add a small folder dataset like:
 ```
 data/
   train/
