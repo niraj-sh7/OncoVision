@@ -44,7 +44,6 @@ data/
 - Then run:
 ```bash
 python training/train_resnet18.py --data_dir data --epochs 2 --batch_size 32
-# Outputs weights: artifacts/resnet18_histopath.pt
 ```
 
 ### API
