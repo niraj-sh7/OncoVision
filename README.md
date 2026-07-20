@@ -8,7 +8,7 @@ End-to-end demo that classifies **histology patches** as suspicious/benign and r
 - **Grad-CAM**: Visual overlay to highlight regions driving the prediction.
 - **Streamlit** demo UI: drag & drop an image, see probability + heatmap instantly.
 
-> ⚠️ Scope: patch-level classification (e.g., 224×224 H&E tiles). Not a clinical tool.
+> Scope: patch-level classification (e.g., 224×224 H&E tiles). Not a clinical tool.
 
 ---
 
@@ -23,7 +23,6 @@ pip install -r requirements.txt
 ### 2) Start the API
 ```bash
 uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
-# Swagger: http://localhost:8000/docs
 ```
 
 ### 3) Run the demo UI
@@ -32,7 +31,7 @@ streamlit run ui/streamlit_app.py
 ```
 
 ### 4) (Optional) Fine-tune the model
-- Drop a small folder dataset like:
+- Add a small folder dataset like:
 ```
 data/
   train/
@@ -45,7 +44,6 @@ data/
 - Then run:
 ```bash
 python training/train_resnet18.py --data_dir data --epochs 2 --batch_size 32
-# Outputs weights: artifacts/resnet18_histopath.pt
 ```
 
 ### API
